@@ -1,0 +1,485 @@
+#!/bin/bash
+POSIXLY_CORRECT=yes
+if [ -z "$EDITOR" ]; then
+    if [ -z "$VISUAL" ]; then
+        MY_EDITOR="vi"
+    else
+        MY_EDITOR="$VISUAL"
+    fi
+else
+    MY_EDITOR="$EDITOR"
+fi
+function help(){
+
+  echo "                                                                       HELP
+                                                                ------------------"
+  echo "1) mole [-g GROUP] FILE – This command opens the specified file.
+  If the -g option is used, the opened file will also be assigned to a group named GROUP. GROUP can be either an existing or a new group.
+  --------------------------------------------------------------------------------------------------------------------------------------------"
+  echo "2) mole [-m] [FILTERS] [DIRECTORY] – This command selects a file from the specified DIRECTORY, which should be an existing directory.
+  If no directory is specified, the current directory is assumed.
+  If multiple files in the directory have been edited using the script, the command selects the file that was edited last.
+  If the -m argument is used, the command selects the file that was edited most frequently.
+  If there are multiple files with the same maximum number of edits, the command may select any of them.
+  The selection of files can be further influenced by using FILTERS.
+  ------------------------------------------------------------------------------------------------------------------------------------------------------------"
+  echo "3) mole list [FILTERS] [DIRECTORY] – This command displays a list of files that have been opened (edited) in the specified DIRECTORY using the script.
+  If no directory is specified, the current directory is assumed.
+  The list of files can be filtered using FILTERS.
+  The list of files will be sorted lexicographically, and each file will be listed on a separate line.
+  Each line will have the format FILENAME:<INDENT>GROUP_1,GROUP_2,..., where FILENAME is the name of the file (including any extensions), <INDENT> is the number of spaces needed for
+  alignment, and GROUP_* are the names of the groups to which the file belongs.
+  The list of groups will be sorted lexicographically.
+  If the groups are specified using the -g option (see the FILTERS section), only the records belonging to those groups will be considered when listing files and groups.
+  If a file does not belong to any group, only the '-' symbol will be displayed instead of the list of groups.
+  The minimum number of spaces used for alignment (INDENT) is one.
+  Each line will be aligned so that the list of groups starts at the same position.
+  For example:
+
+          FILE1: grp1,grp2
+          FILE10: grp1,grp3
+          FILE: -
+  --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------"
+}
+if [[ -z "$MOLE_RC" ]]; then
+    echo "Error: MOLE_RC variable is not set"
+    exit 1
+fi
+
+if [[ ! -f "$MOLE_RC" ]]; then
+    #echo "Creating MOLE_RC file: $MOLE_RC"
+    mkdir -p "$(dirname "$MOLE_RC")"
+    touch "$MOLE_RC"
+fi
+
+function sort_by_directory(){
+  dir_name="$1"
+    if [ ! -s "$MOLE_RC" ];
+        then
+          echo "There isn't any information about files"
+          exit 0
+    fi
+    if [ -z "$dir_name" ]; then
+         directory=$(dirname "$(readlink -f "$0")")
+         dir_name="$directory"
+      fi
+      directory="$dir_name"
+
+         while IFS= read -r line; do
+              file_path=$(echo "$line" | cut -d',' -f3)
+              directory_path=$(dirname "$file_path")
+             if [ $directory == $directory_path ]; then
+              file=$(echo "$line" | awk -F',' '{printf "%s,%s,%s,%s,%s\n", $1, $2, $3, $4, $5}')
+              files_in_directory="$files_in_directory$file"$'\n'
+             fi
+        done < "$MOLE_RC"
+        files_in_directory=$(echo "$files_in_directory" | tr '\n' ';' | sed 's/,$//')
+        echo "$files_in_directory"
+}
+
+function sort_by_groups(){
+  GROUP="$1"
+  dir_name="$2"
+  file_to_sort="$3"
+  if [ ! -s "$MOLE_RC" ];
+        then
+          echo "There isn't any information about files"
+          exit 0
+    fi
+    if [ -z "$dir_name" ]; then
+         directory=$(dirname "$(readlink -f "$0")")
+         dir_name="$directory"
+    fi
+  if [ -z "$file_to_sort" ]; then
+      file_to_sort="$(sort_by_directory "$dir_name")"
+      file_to_sort=$(echo "$file_to_sort" | tr ';' '\n')
+  fi
+  if [[ $GROUP == *','* ]]; then
+  GROUP="${GROUP//,/ }"
+  for g in $GROUP; do
+      for f in $file_to_sort; do
+         if [[ $f == *"$g"* ]]; then
+            file_search="$file_search$f"$'\n'
+         fi
+      done
+  done
+  else
+    for g in $GROUP; do
+      for f in $file_to_sort; do
+          if [[ $f == *"$g"* ]]; then
+             file_search="$file_search$f"$'\n'
+          fi
+      done
+   done
+  fi
+    file_search=$(echo "$file_search" | tr '\n' ';' | sed 's/,$//')
+    echo "$file_search"
+}
+
+function openfile(){
+    GROUP="$1"
+    file_way="$2"
+if [[ -f "$file_way" ]];
+        then
+            filename=$(basename "$file_way")
+            if [[ $GROUP == *','* ]];
+            then
+                echo "$GROUP Incorrect name of group"
+                exit 0
+            fi
+            count=$(grep -c "$file_way" "$MOLE_RC")
+            date=$(date +'%Y-%m-%d-%H-%M-%S')
+            echo "$date,$filename,$file_way,$GROUP,$count" >> "$MOLE_RC"
+            fop=$(echo "$file_way" | awk -F'/' '{print $5}')
+            $MY_EDITOR -n "$fop"
+        else
+            echo "$file_way doesn't exist or is not a file or directory"
+            exit 0
+    fi
+}
+
+function open_latest_file(){
+  sort_files="$1"
+     latest_file=""
+  for l in $sort_files; do
+      if [[ -z $latest_file ]]; then
+         latest_file="$l"
+      else
+      if [[ "$l" > "$latest_file" ]]; then
+         latest_file="$l"
+      fi
+      fi
+  done
+  fop=$(echo "$latest_file" | awk -F',' '{print $2}')
+
+  way_file=$(echo "$latest_file" | awk -F',' '{print $3}')
+  group=$(echo "$latest_file" | awk -F',' '{print $4}')
+  count=$(grep -c "$way_file" "$MOLE_RC")
+  date=$(date +'%Y-%m-%d-%H-%M-%S')
+  echo "$date,$fop,$way_file,$group,$count" >> "$MOLE_RC"
+  fop=$(echo "$latest_file" | awk -F',' '{print $3}')
+  $MY_EDITOR -n "$fop"
+}
+
+function open_most_opened_file(){
+  sort_files="$1"
+  most_open_file=$(echo "$sort_files" | sort -k5 -n | tail -n 1)
+  way_file=$(echo "$most_open_file" | awk -F',' '{print $3}')
+  group=$(echo "$most_open_file" | awk -F',' '{print $4}')
+  count=$(grep -c "$way_file" "$MOLE_RC")
+  date=$(date +'%Y-%m-%d-%H-%M-%S')
+  fop=$(echo "$most_open_file" | awk -F',' '{print $2}')
+  echo "$date,$fop,$way_file,$group,$count" >> "$MOLE_RC"
+  $MY_EDITOR -n "$fop"
+  }
+
+
+function sort_list(){
+  sort_files="$1"
+  sort_files=$(echo "$sort_files" | awk -F ',' '{print $2 "," $4}' | sort | awk -F ',' '{if ($1!=prev) {if (prev!="") print ""; printf "%-10s %s", $1":", $2; prev=$1; prev2=$2} else {if ($2!=prev2) {printf ",%s", $2; prev2=$2}}} END {print ""}')
+  echo "$sort_files"
+}
+
+function sort_secret(){
+   sort_files="$1"
+   username=$(whoami)
+   datetime=$(date +%Y%m%d%H%M%S)
+   log_file="log_${username}_${datetime}.bz2"
+   paths=$(echo "$sort_files" | awk -F, '{print $3}' | sort -u)
+    for path in $(echo "$paths" | tr ' ' '\n' | sort); do
+       date=$(echo "$sort_files" | awk -F, -v path="$path" '$3 == path {print $1}' | sort)
+       echo "${path};${date}" | tr '\n' ';'
+       echo
+     done | bzip2 > "$log_file"
+}
+
+
+
+if [ "$1" == "list" ]; then
+  list_flag="true"
+  shift 1
+fi
+
+if [ "$1" == "secret-log" ]; then
+  secret_flag="true"
+  shift 1
+fi
+
+while getopts "hg:a:b:m" opt; do
+  case $opt in
+    h) help "$OPTARG";;
+    g) GROUP="$OPTARG"
+       g_flag="true";;
+    a) a_date="$OPTARG"
+       a_flag="true";;
+    b) b_date="$OPTARG"
+       b_flag="true";;
+    m) m_flag="true";;
+    *) echo "Invalid option: -$OPTARG" >&2 ;;
+  esac
+done
+
+if [[ $list_flag == *'true'* ]] && [[ $m_flag == *'true'* ]]; then
+    echo "You can't start program with this arguments concurrently"
+    exit 0
+fi
+if [[ $list_flag == *'true'* ]] && [[ $secret_flag == *'true'* ]]; then
+    echo "You can't start program with this arguments concurrently"
+    exit 0
+fi
+if [[ $m_flag == *'true'* ]] && [[ $secret_flag == *'true'* ]]; then
+    echo "You can't start program with this arguments concurrently"
+    exit 0
+fi
+if [[ $m_flag == *'true'* ]] && [[ $secret_flag == *'true'* ]] && [[ $list_flag == *'true'* ]]; then
+    echo "You can't start program with this arguments concurrently"
+    exit 0
+fi
+if [[ $g_flag == *'true'* ]] && [[ $secret_flag == *'true'* ]]; then
+    echo "You can't start program with this arguments concurrently"
+    exit 0
+fi
+shift $((OPTIND -1))
+
+#aaaa
+ if [[ $a_flag == *'true'* ]] && [[ $secret_flag != *'true'* ]]; then
+     a_date="$a_date"
+     directory="$1"
+     shift 1
+     if [ -d "$directory" ]; then
+         directory="$directory"
+     else
+       directory=$(dirname "$(readlink -f "$0")")
+     fi
+
+     if [ -z "$directory" ]; then
+      directory=$(dirname "$(readlink -f "$0")")
+     fi
+  files_in_directory="$(sort_by_directory "$directory")"
+  files_in_directory=$(echo "$files_in_directory" | tr ';' '\n')
+  sort=$(echo "$files_in_directory" | awk -v date="$a_date" -F ',' '$1 >= date {print}')
+
+  if [[ $b_flag != *'true'* ]] && [[ $g_flag != *'true'* ]] && [[ $m_flag != *'true'* ]] && [[ $list_flag != *'true'* ]]; then
+      open_latest_file "$sort"
+  fi
+
+  if [[ $b_flag != *'true'* ]] && [[ $g_flag != *'true'* ]] && [[ $m_flag == *'true'* ]]; then
+        open_most_opened_file "$sort"
+  fi
+
+  if [[ $b_flag != *'true'* ]] && [[ $g_flag != *'true'* ]] && [[ $list_flag == *'true'* ]]; then
+      sort_list "$sort"
+  fi
+
+ fi
+
+#bbbbb
+ if [[ $b_flag == *'true'* ]] && [[ $secret_flag != *'true'* ]]; then
+   b_date="$b_date"
+   directory="$1"
+   shift 1
+     if [[ $a_flag == *'true'* ]]; then
+         sort=$(echo "$sort" | awk -v date="$b_date" -F ',' '$1 <= date {print}')
+         if [[ $g_flag != *'true'* ]] && [[ $list_flag != *'true'* ]] && [[ $m_flag != *'true'* ]]; then
+            open_latest_file "$sort"
+         fi
+         if [[ $g_flag != *'true'* ]] && [[ $m_flag == *'true'* ]]; then
+             open_most_opened_file "$sort"
+         fi
+         if [[ $g_flag != *'true'* ]] && [[ $list_flag == *'true'* ]]; then
+             sort_list "$sort"
+         fi
+     else
+        if [ -d "$directory" ]; then
+            directory="$directory"
+          else
+              directory=$(dirname "$(readlink -f "$0")")
+        fi
+         files_in_directory="$(sort_by_directory "$directory")"
+         files_in_directory=$(echo "$files_in_directory" | tr ';' '\n')
+         sort_b=$(echo "$files_in_directory" | awk -v date="$b_date" -F ',' '$1 <= date {print}')
+         if [[ $g_flag != *'true'* ]] && [[ $list_flag != *'true'* ]] && [[ $m_flag != *'true'* ]] && [[ $list_flag != *'true'* ]]; then
+            open_latest_file "$sort_b"
+         fi
+
+         if [[ $g_flag != *'true'* ]] && [[ $m_flag == *'true'* ]]; then
+             open_most_opened_file "$sort_b"
+         fi
+
+         if [[ $g_flag != *'true'* ]] && [[ $list_flag == *'true'* ]]; then
+             sort_list "$sort_b"
+         fi
+
+      fi
+fi
+
+#ggggg
+ if [[ $g_flag == *'true'* ]]; then
+    GROUP="$GROUP"
+    file_way="$1"
+    shift 1
+    if [ -f "$file_way" ]; then
+        openfile "$GROUP" "$file_way"
+    fi
+   if [[ $a_flag == *'true'* ]] && [[ $b_flag == *'true'* ]]; then
+      file_search="$(sort_by_groups "$GROUP" "$file_way" "$sort")"
+      file_search=$(echo "$file_search" | tr ';' '\n')
+
+   fi
+
+   if [[ $a_flag == *'true'* ]] && [[ $b_flag != *'true'* ]]; then
+      file_search="$(sort_by_groups "$GROUP" "$file_way" "$sort")"
+      file_search=$(echo "$file_search" | tr ';' '\n')
+   fi
+
+   if [[ $a_flag != *'true'* ]] && [[ $b_flag == *'true'* ]]; then
+         file_search="$(sort_by_groups "$GROUP" "$file_way" "$sort_b")"
+         file_search=$(echo "$file_search" | tr ';' '\n')
+   fi
+
+   if [[ $a_flag != *'true'* ]] && [[ $b_flag != *'true'* ]]; then
+       file_search="$(sort_by_groups "$GROUP" "$file_way" "")"
+       file_search=$(echo "$file_search" | tr ';' '\n')
+   fi
+
+   if [[ $m_flag != *'true'* ]] && [[ $list_flag != *'true'* ]]; then
+       open_latest_file "$file_search"
+   fi
+
+   if [[ $m_flag == *'true'* ]]; then
+          open_most_opened_file "$file_search"
+   fi
+
+   if [[ $list_flag == *'true'* ]]; then
+       sort_list "$file_search"
+   fi
+ fi
+
+#./mole
+  if [[ $b_flag != *'true'* ]] && [[ $g_flag != *'true'* ]] && [[ $m_flag != *'true'* ]] && [[ $a_flag != *'true'* ]] && [[ $list_flag != *'true'* ]] && [[ $secret_flag != *'true'* ]];
+  then
+      directory="$1"
+      files_in_directory="$(sort_by_directory "$directory")"
+      files_in_directory=$(echo "$files_in_directory" | tr ';' '\n')
+      open_latest_file "$files_in_directory"
+  fi
+
+#./mole -m
+  if [[ $b_flag != *'true'* ]] && [[ $g_flag != *'true'* ]] && [[ $m_flag == *'true'* ]] && [[ $a_flag != *'true'* ]]; then
+      directory="$1"
+      files_in_directory="$(sort_by_directory "$directory")"
+      files_in_directory=$(echo "$files_in_directory" | tr ';' '\n')
+      open_most_opened_file "$files_in_directory"
+  fi
+
+#./mole list
+  if [[ $b_flag != *'true'* ]] && [[ $g_flag != *'true'* ]] && [[ $a_flag != *'true'* ]] && [[ $list_flag == *'true'* ]]; then
+     directory="$1"
+     shift 1
+     if [ -z "$directory" ]; then
+           directory=$(dirname "$(readlink -f "$0")")
+     fi
+     files_in_directory="$(sort_by_directory "$directory")"
+     files_in_directory=$(echo "$files_in_directory" | tr ';' '\n')
+     sort_list "$files_in_directory"
+  fi
+
+#./mole secret
+  if [[ $b_flag != *'true'* ]] && [[ $a_flag != *'true'* ]] && [[ $secret_flag == *'true'* ]]; then
+       directories="$1;"
+        shift 1
+       while [ $# -gt 0 ]; do
+         directories="$directories$1;"
+         shift 1
+       done
+       directories=$(echo "$directories" | tr ';' '\n')
+       new_directories=""
+       for d in $directories; do
+           if [ -d "$d" ]; then
+               new_directories="$new_directories"$'\n'"$d"
+           else
+               directories=${directories//$d/}
+           fi
+       done
+       directories=$(echo "$directories" | sed '/^$/d')
+       if [ -z "$directories" ]; then
+           directories=$(dirname "$(readlink -f "$0")")
+       fi
+       files_in_dir=""
+       for d in $directories; do
+          files="$(sort_by_directory "$d")"
+          files=$(echo "$files" | tr ';' '\n')
+          files_in_dir="${files_in_dir}${files}"$'\n'
+       done
+       sort_secret "$files_in_dir"
+
+  fi
+
+  if [[ $a_flag == *'true'* ]] && [[ $secret_flag == *'true'* ]]; then
+     directories="$1;"
+     shift 1
+     while [ $# -gt 0 ]; do
+       directories="$directories$1;"
+       shift 1
+       done
+       directories=$(echo "$directories" | tr ';' '\n')
+       new_directories=""
+       for d in $directories; do
+       if [ -d "$d" ]; then
+       new_directories="$new_directories"$'\n'"$d"
+       else
+       directories=${directories//$d/}
+       fi
+       done
+       directories=$(echo "$directories" | sed '/^$/d')
+       if [ -z "$directories" ]; then
+           directories=$(dirname "$(readlink -f "$0")")
+       fi
+       for d in $directories; do
+          files="$(sort_by_directory "$d")"
+          files=$(echo "$files" | tr ';' '\n')
+          files_in_dir="${files_in_dir}${files}"$'\n'
+       done
+       a_secret=$(echo "$files_in_dir" | awk -v date="$a_date" -F ',' '$1 >= date {print}')
+       if [[ $b_flag != *'true'* ]]; then
+           sort_secret "$a_secret"
+       fi
+  fi
+
+  if [[ $b_flag == *'true'* ]] && [[ $secret_flag == *'true'* ]]; then
+      directories="$1;"
+      shift 1
+      while [ $# -gt 0 ]; do
+        directories="$directories$1;"
+        shift 1
+        done
+      directories=$(echo "$directories" | tr ';' '\n')
+      new_directories=""
+      for d in $directories; do
+        if [ -d "$d" ]; then
+          new_directories="$new_directories"$'\n'"$d"
+        else
+          directories=${directories//$d/}
+        fi
+      done
+      directories=$(echo "$directories" | sed '/^$/d')
+        if [ -z "$directories" ]; then
+                 directories=$(dirname "$(readlink -f "$0")")
+        fi
+             for d in $directories; do
+                files="$(sort_by_directory "$d")"
+                files=$(echo "$files" | tr ';' '\n')
+                files_in_dir="${files_in_dir}${files}"$'\n'
+             done
+        if [[ $a_flag == *'true'* ]]; then
+            ab_secret=$(echo "$a_secret" | awk -v date="$b_date" -F ',' '$1 <= date {print}')
+            sort_secret "$ab_secret"
+         else
+           b_secret=$(echo "$files_in_dir" | awk -v date="$b_date" -F ',' '$1 <= date {print}')
+           sort_secret "$b_secret"
+        fi
+
+  fi
+
+
+
